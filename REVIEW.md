@@ -84,6 +84,12 @@ to be the same length. Memory `O(k)` is right.
 
 ## 5. Small things
 
+- **The LICENSE is incomplete.** It stops at `FITNESS FOR A PARTICULAR PURPOSE
+  AND NONINFRINGEMENT.` and is missing the final four lines of the standard MIT
+  text — the entire liability disclaimer (`IN NO EVENT SHALL THE AUTHORS OR
+  COPYRIGHT HOLDERS BE LIABLE…`). As a licence it still expresses MIT intent,
+  but without the disclaimer it is not the MIT text, and GitHub's licensee
+  scores it `NOASSERTION` rather than `MIT`. Restored in this directory.
 - `__pycache__/*.pyc` shipped in the archive; no `.gitignore`.
 - `search_dict` relies on `Match.__dict__`, which works for a non-slotted frozen
   dataclass but breaks silently if someone adds `slots=True`.
