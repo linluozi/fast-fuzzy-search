@@ -110,13 +110,15 @@ the length gate uses the new threshold, and the DP is called with it as `k`.
 Results are byte-identical to the unpruned scan — this is exact, not approximate,
 and `tests/test_fast_fuzzy.py` asserts that over ~1,900 randomized combinations.
 
-Measured against the unpruned version (`benchmark.py`, part 2):
+Measured against the unpruned version (`benchmark.py`, part 2). These are single
+runs and the spread between runs is ±10% on the short-string rows, so read the
+pattern, not the digits:
 
 | corpus | limit | gain |
 |---|---|---|
-| Chinese 2-4 chars, no matches | 1 / 10 / 100 | 0.99× / 0.98× / 1.00× |
-| Chinese 2-4 chars, near misses | 1 / 10 / 100 | 1.02× / 0.99× / 0.95× |
-| English 20-40 chars, near misses | 1 / 10 / 100 | **1.34×** / 1.05× / 0.99× |
+| Chinese 2-4 chars, no matches | 1 / 10 / 100 | 0.94-0.99× / 0.98-1.04× / 0.93-1.00× |
+| Chinese 2-4 chars, near misses | 1 / 10 / 100 | 0.90-1.02× / 0.99-1.04× / 0.92-0.95× |
+| English 20-40 chars, near misses | 1 / 10 / 100 | **1.18-1.34×** / 0.89-1.05× / 0.99-1.00× |
 
 That is far less than the textbook argument suggests, and the reason is worth
 stating: **the thing being skipped is already cheap.** By the time a candidate
@@ -124,15 +126,17 @@ reaches the DP, the length gate has usually removed it, and when it does reach
 the DP the band plus early exit have already collapsed the work. There is little
 left for a tighter threshold to remove.
 
-The one place it pays is long strings with a small `limit`, where each skipped
-candidate would have been genuinely expensive — and even there it is 1.3×, not
-10×. With `limit` in the hundreds the window maintenance costs more than the
-pruning saves, and the code falls back to appending unsorted for exactly that
-reason.
+The only row with a repeatable gain is long strings at `limit=1`, where each
+skipped candidate would have been genuinely expensive. The size of that gain
+depends on how many near neighbours the corpus contains: with a sparse corpus it
+is ~1.2-1.3×, and with hundreds of near neighbours it reaches 2.8× because the
+window settles at distance 0 early and everything after it is skipped. With
+`limit` in the hundreds the window maintenance costs more than the pruning saves.
 
-It is kept because it is exact, cheap, and never loses more than a few percent,
-not because it is a big win. Anyone reading a claim that top-k pruning gives a
-large speedup on short-string fuzzy search should measure it themselves.
+It is kept because it is exact and its worst case is noise-level, not because it
+is a win. Anyone reading a claim that top-k pruning gives a large speedup on
+short-string fuzzy search should measure it themselves — on this workload it
+does not, and the distance kernel is the reason.
 
 ## What is not implemented
 
