@@ -10,6 +10,7 @@ DP only once the band covers a small enough slice of the matrix. See
 OPTIMIZATION_REPORT.md for the measurements behind the branch points.
 """
 from __future__ import annotations
+import bisect
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
@@ -140,6 +141,11 @@ def search(query: str, choices: Iterable[str], *, max_distance: int = 2,
 
     Similarity score is 100 * (1 - distance / max_length), with empty/empty = 100.
     Ties are deterministic: distance, normalized value, then original value.
+
+    The threshold starts at `max_distance` and tightens to the current k-th best
+    distance once `limit` results are held. Tightening prunes twice: candidates
+    farther than the new threshold skip the DP, and the length gate uses the new
+    threshold too. Results are identical to an unpruned scan, not approximate.
     """
     if max_distance < 0:
         raise ValueError("max_distance must be >= 0")
@@ -147,20 +153,49 @@ def search(query: str, choices: Iterable[str], *, max_distance: int = 2,
         raise ValueError("limit must be >= 0")
     if limit == 0:
         return []
+
     q = query if case_sensitive else query.casefold()
-    matches: list[Match] = []
+    lq = len(q)
+    # Sorted ascending by (distance, folded, original) — the same key the
+    # unpruned implementation sort()s on, so ties break identically.
+    kept: list[tuple[int, str, str]] = []
+    threshold = max_distance
+
     for original in choices:
-        candidate = original if case_sensitive else original.casefold()
-        if abs(len(q) - len(candidate)) > max_distance:
+        if case_sensitive:
+            candidate = original
+            # Ties are broken on the folded form even when matching is
+            # case-sensitive; that is what the unpruned version sorts on.
+            tie = original.casefold()
+        else:
+            candidate = tie = original.casefold()
+        if abs(lq - len(candidate)) > threshold:
             continue
-        distance = levenshtein_bounded(q, candidate, max_distance)
+        distance = levenshtein_bounded(q, candidate, threshold)
         if distance is None:
             continue
-        denom = max(len(q), len(candidate))
+        entry = (distance, tie, original)
+        if len(kept) < limit:
+            # Append unsorted: with a large limit, inserting in order costs
+            # O(limit) per hit for a list that will be sorted once at the end.
+            kept.append(entry)
+            if len(kept) == limit:
+                kept.sort()
+                threshold = kept[-1][0]
+        elif entry < kept[-1]:
+            bisect.insort(kept, entry)
+            del kept[-1]
+            threshold = kept[-1][0]
+
+    if len(kept) < limit:
+        kept.sort()
+
+    result = []
+    for distance, candidate, original in kept:
+        denom = max(lq, len(candidate))
         score = 100.0 if denom == 0 else 100.0 * (1.0 - distance / denom)
-        matches.append(Match(original, distance, score))
-    matches.sort(key=lambda item: (item.distance, item.value.casefold(), item.value))
-    return matches[:limit]
+        result.append(Match(original, distance, score))
+    return result
 
 
 def search_dict(query: str, choices: Sequence[str], *, max_distance: int = 2,

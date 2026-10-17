@@ -21,7 +21,10 @@ for m in search("pyhton", choices, max_distance=2, limit=5):
     print(m.value, m.distance, round(m.score, 1))
 ```
 
-- `search()` — ranked matches, deterministic tie-breaking
+- `search()` — ranked matches, deterministic tie-breaking. Once `limit` results
+  are held it tightens its working threshold to the current k-th distance, which
+  prunes exactly (identical output, not approximate) but is only worth ~1.3× on
+  long strings — the candidates it skips were already cheap.
 - `search_dict()` — same, as plain dicts for JSON/API responses
 - `levenshtein_bounded(a, b, k)` — distance if `<= k`, else `None`
 - `levenshtein_reference(a, b)` — unbounded distance, used by the tests

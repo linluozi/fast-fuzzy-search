@@ -101,15 +101,44 @@ does not. Measured on 4000 Chinese words it costs about **5%** (`6.7 ms` vs
 `6.4 ms`). That is the price of a general entry point, and it is dwarfed by the
 `30x` it buys at the other end of the length range.
 
+## Top-k tightening: implemented, and worth less than expected
+
+`search()` used to scan everything, sort, then truncate. It now keeps a window of
+the best `limit` results and tightens the working threshold to the current
+`limit`-th distance as soon as the window fills. Tightening prunes in two places:
+the length gate uses the new threshold, and the DP is called with it as `k`.
+Results are byte-identical to the unpruned scan — this is exact, not approximate,
+and `tests/test_fast_fuzzy.py` asserts that over ~1,900 randomized combinations.
+
+Measured against the unpruned version (`benchmark.py`, part 2):
+
+| corpus | limit | gain |
+|---|---|---|
+| Chinese 2-4 chars, no matches | 1 / 10 / 100 | 0.99× / 0.98× / 1.00× |
+| Chinese 2-4 chars, near misses | 1 / 10 / 100 | 1.02× / 0.99× / 0.95× |
+| English 20-40 chars, near misses | 1 / 10 / 100 | **1.34×** / 1.05× / 0.99× |
+
+That is far less than the textbook argument suggests, and the reason is worth
+stating: **the thing being skipped is already cheap.** By the time a candidate
+reaches the DP, the length gate has usually removed it, and when it does reach
+the DP the band plus early exit have already collapsed the work. There is little
+left for a tighter threshold to remove.
+
+The one place it pays is long strings with a small `limit`, where each skipped
+candidate would have been genuinely expensive — and even there it is 1.3×, not
+10×. With `limit` in the hundreds the window maintenance costs more than the
+pruning saves, and the code falls back to appending unsorted for exactly that
+reason.
+
+It is kept because it is exact, cheap, and never loses more than a few percent,
+not because it is a big win. Anyone reading a claim that top-k pruning gives a
+large speedup on short-string fuzzy search should measure it themselves.
+
 ## What is not implemented
 
-- **Top-k pruning.** `search()` sorts after scanning everything. Keeping a heap
-  and tightening `max_distance` to the current k-th distance would cut work when
-  `limit` is small and matches are dense. Not done here; it changes the code's
-  shape more than the ratio justifies for a lookup that is already dominated by
-  the distance computation.
 - **Indexing.** No BK-tree or n-gram prefilter. Every call is linear in
-  `len(choices)`.
+  `len(choices)`. This is the remaining big lever, and unlike the two above it
+  changes the complexity class rather than the constant.
 - **Normalization.** Callers should `unicodedata.normalize` their data; this
   module compares code points.
 

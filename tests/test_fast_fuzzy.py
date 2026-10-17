@@ -99,6 +99,32 @@ class DistanceTests(unittest.TestCase):
                                      (base, other, k))
 
 
+def search_unpruned(query, choices, *, max_distance=2, limit=10, case_sensitive=False):
+    """Reference: scan everything, sort, truncate. No threshold tightening.
+
+    `search()` must agree with this exactly — same order, same scores — or the
+    pruning is not safe.
+    """
+    if max_distance < 0 or limit < 0:
+        raise ValueError
+    if limit == 0:
+        return []
+    q = query if case_sensitive else query.casefold()
+    found = []
+    for original in choices:
+        candidate = original if case_sensitive else original.casefold()
+        if abs(len(q) - len(candidate)) > max_distance:
+            continue
+        d = levenshtein_bounded(q, candidate, max_distance)
+        if d is None:
+            continue
+        denom = max(len(q), len(candidate))
+        score = 100.0 if denom == 0 else 100.0 * (1.0 - d / denom)
+        found.append((d, original.casefold(), original, score))
+    found.sort(key=lambda t: (t[0], t[1], t[2]))
+    return [(d, original, score) for d, _tie, original, score in found[:limit]]
+
+
 class SearchTests(unittest.TestCase):
     def test_search(self):
         found = search('pyhton', ['python', 'java', 'pytorch', 'PYTHON'], max_distance=2, limit=3)
@@ -143,6 +169,49 @@ class SearchTests(unittest.TestCase):
         out = search_dict('pyhton', ['python'], max_distance=2, limit=1)
         self.assertEqual(set(out[0]), {'value', 'distance', 'score'})
         self.assertEqual(out[0]['value'], 'python')
+
+    def test_pruning_matches_unpruned_scan(self):
+        """Threshold tightening must not change which items win, or their order."""
+        rng = random.Random(4242)
+        for _ in range(60):
+            words = [''.join(rng.choice('abcdé') for _ in range(rng.randrange(0, 7)))
+                     for _ in range(120)]
+            q = ''.join(rng.choice('abcdé') for _ in range(rng.randrange(0, 5)))
+            for limit in (1, 3, 10, 200):
+                for k in (0, 1, 2, 3):
+                    for cs in (False, True):
+                        got = [(m.distance, m.value, m.score)
+                               for m in search(q, words, max_distance=k, limit=limit,
+                                               case_sensitive=cs)]
+                        want = search_unpruned(q, words, max_distance=k, limit=limit,
+                                               case_sensitive=cs)
+                        self.assertEqual(got, want, (q, limit, k, cs))
+
+    def test_pruning_when_threshold_collapses_to_zero(self):
+        """Dense exact-ish matches drive the threshold to 0; later candidates at
+        distance 1 must still be excluded, and equal-distance ties still sorted."""
+        words = ['ab', 'ab', 'AB', 'abc', 'abd', 'aab', 'b', 'abcd']
+        for limit in (1, 2, 3, 5, 20):
+            for k in (0, 1, 2):
+                got = [(m.distance, m.value) for m in search('ab', words, max_distance=k,
+                                                             limit=limit)]
+                want = [(d, v) for d, v, _ in search_unpruned('ab', words, max_distance=k,
+                                                              limit=limit)]
+                self.assertEqual(got, want, (limit, k))
+
+    def test_tiebreak_uses_folded_form_even_when_case_sensitive(self):
+        """'Z'.casefold() > 'a'.casefold(), so 'a' sorts first despite 'Z' < 'a'."""
+        got = [m.value for m in search('x', ['Z', 'a'], max_distance=1,
+                                       case_sensitive=True, limit=5)]
+        self.assertEqual(got, ['a', 'Z'])
+        self.assertEqual(got, [v for _d, v, _s in search_unpruned(
+            'x', ['Z', 'a'], max_distance=1, case_sensitive=True, limit=5)])
+
+    def test_pruning_respects_limit_larger_than_corpus(self):
+        words = ['alpha', 'alpah', 'beta']
+        got = [(m.value, m.distance) for m in search('alpha', words, max_distance=2, limit=50)]
+        want = [(v, d) for d, v, _ in search_unpruned('alpha', words, max_distance=2, limit=50)]
+        self.assertEqual(got, want)
 
 
 if __name__ == '__main__':

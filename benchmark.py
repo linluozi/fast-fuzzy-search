@@ -1,6 +1,6 @@
-"""Fair three-arm benchmark for thresholded Levenshtein search.
+"""Benchmarks for thresholded Levenshtein search.
 
-Arms
+Part 1 — three arms for the distance kernel
   A  naive      full DP, no length filter        (the pattern being improved)
   B  lenfilter  full DP + length-difference gate
   C  library    fast_fuzzy.levenshtein_bounded   (adaptive: plain or banded)
@@ -8,6 +8,9 @@ Arms
 Reporting B is the point: C = B + banding, so B/C isolates what banding actually
 buys. Comparing only A vs C (as the original benchmark did) credits the length
 filter's win to the band, which overstates it by 2-4x.
+
+Part 2 — end-to-end `search()` with and without top-k threshold tightening,
+because that optimization does not pay uniformly either.
 
 Method
   - arms interleaved within each round, per-round ratios, median reported
@@ -20,7 +23,7 @@ import string
 import statistics
 import time
 
-from fast_fuzzy import levenshtein_bounded, levenshtein_reference
+from fast_fuzzy import levenshtein_bounded, levenshtein_reference, search
 
 ROUNDS = 5
 N = 4000
@@ -118,6 +121,78 @@ def run(label, factory):
     )
 
 
+def unpruned_search(query, choices, max_distance=2, limit=10):
+    """`search()` without threshold tightening: scan, sort, truncate."""
+    q = query.casefold()
+    found = []
+    for original in choices:
+        cand = original.casefold()
+        if abs(len(q) - len(cand)) > max_distance:
+            continue
+        d = levenshtein_bounded(q, cand, max_distance)
+        if d is None:
+            continue
+        found.append((d, cand, original))
+    found.sort(key=lambda t: (t[0], t[1], t[2]))
+    return found[:limit]
+
+
+def mutate(word, rng, n, alphabet):
+    """Near-miss copies, so the corpus actually contains matches."""
+    out = []
+    for _ in range(n):
+        chars = list(word)
+        i = rng.randrange(len(chars))
+        chars[i] = rng.choice(alphabet)
+        out.append(''.join(chars))
+    return out
+
+
+def search_case_zh():
+    rng = random.Random(99)
+    words = make_words(rng, 6000, 2, 4, ZH)
+    return 'short Chinese, query absent', '计算机', words, 2
+
+
+def search_case_zh_rich():
+    rng = random.Random(99)
+    words = make_words(rng, 6000, 2, 4, ZH)
+    q = '计算机'
+    words += [q] + mutate(q, rng, 30, ZH[:80]) + mutate(q, rng, 30, ZH[:80])
+    return 'short Chinese + near misses', q, words, 2
+
+
+def search_case_en_long():
+    rng = random.Random(5)
+    base = ''.join(rng.choice(EN) for _ in range(30))
+    words = make_words(rng, 3000, 20, 40, EN) + [base] + mutate(base, rng, 30, EN)
+    return 'long English + near misses', base, words, 2
+
+
+SEARCH_CASES = [
+    ('zh 2-4, no matches', search_case_zh),
+    ('zh 2-4, near misses', search_case_zh_rich),
+    ('en 20-40, near misses', search_case_en_long),
+]
+
+
+def run_search(label, factory, limit):
+    _tag, q, words, k = factory()
+    tu, tp, hits = [], [], 0
+    for _ in range(ROUNDS):
+        t0 = time.perf_counter()
+        a = unpruned_search(q, words, k, limit)
+        tu.append(time.perf_counter() - t0)
+        t0 = time.perf_counter()
+        b = search(q, words, max_distance=k, limit=limit)
+        tp.append(time.perf_counter() - t0)
+        assert [(m.distance, m.value) for m in b] == [(d, v) for d, _, v in a], label
+        hits = len(a)
+    return dict(label=label, limit=limit, hits=hits,
+                unpruned=min(tu), pruned=min(tp),
+                gain=statistics.median([x / y for x, y in zip(tu, tp)]))
+
+
 def main():
     print(f'candidates/arm: {N}   rounds: {ROUNDS}   arms interleaved per round')
     print('A=naive  B=+length filter  C=adaptive library')
@@ -140,6 +215,22 @@ def main():
     print('Reading the table: banding only pays above ~6*k+2 characters. Below that the library')
     print('dispatches to plain DP, so C/B sits near 1.0 instead of the 0.5x you get by forcing')
     print('the band on short strings. C/A is what a caller actually experiences.')
+
+    print()
+    print()
+    print('=' * 88)
+    print('search(): top-k threshold tightening vs an unpruned scan')
+    print('=' * 88)
+    print(f"{'case':<26}{'k':>3}{'limit':>7}{'hits':>6}{'unpruned':>12}{'pruned':>11}{'gain':>8}")
+    for label, factory in SEARCH_CASES:
+        for limit in (1, 10, 100):
+            r = run_search(label, factory, limit)
+            print(f"{r['label']:<26}{factory()[3]:>3}{r['limit']:>7}{r['hits']:>6}"
+                  f"{r['unpruned']*1000:>10.1f}ms{r['pruned']*1000:>9.1f}ms{r['gain']:>7.2f}x")
+    print()
+    print('Tightening only pays where a skipped candidate would have been expensive:')
+    print('long strings with a small limit. On 2-4 character Chinese it is a wash, and')
+    print('with a limit in the hundreds the window maintenance eats the gain.')
 
 
 if __name__ == '__main__':
