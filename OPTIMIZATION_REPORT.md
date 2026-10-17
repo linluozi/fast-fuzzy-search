@@ -138,13 +138,21 @@ is a win. Anyone reading a claim that top-k pruning gives a large speedup on
 short-string fuzzy search should measure it themselves — on this workload it
 does not, and the distance kernel is the reason.
 
-## What is not implemented
+## Indexing
 
-- **Indexing.** No BK-tree or n-gram prefilter. Every call is linear in
-  `len(choices)`. This is the remaining big lever, and unlike the two above it
-  changes the complexity class rather than the constant.
-- **Normalization.** Callers should `unicodedata.normalize` their data; this
-  module compares code points.
+Shipped as `Index`, a q-gram prefilter — and only after a BK-tree prototype
+failed in every measured configuration. Both the numbers and the reasons are in
+`INDEXING.md`. The short version: on 2-4 character Chinese, a BK-tree visits
+70,798 of 80,000 nodes because the distance distribution is too compressed for
+the triangle inequality to discriminate, and on long strings it loses by 6×
+because navigating the tree requires *exact* distances while the linear scan gets
+to use the band. The q-gram index has the opposite profile: useless on short
+strings (the gram bound is literally zero), 18.8× on 8-18 character English.
+
+## Normalization
+
+Callers should `unicodedata.normalize` their data; this module compares code
+points.
 
 ## Benchmark hygiene
 

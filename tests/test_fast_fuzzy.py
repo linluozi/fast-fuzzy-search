@@ -9,7 +9,7 @@ import itertools
 import random
 import string
 import unittest
-from fast_fuzzy import levenshtein_bounded, levenshtein_reference, search, search_dict
+from fast_fuzzy import Index, levenshtein_bounded, levenshtein_reference, search, search_dict
 
 
 def all_strings(alphabet, maxlen):
@@ -212,6 +212,80 @@ class SearchTests(unittest.TestCase):
         got = [(m.value, m.distance) for m in search('alpha', words, max_distance=2, limit=50)]
         want = [(v, d) for d, v, _ in search_unpruned('alpha', words, max_distance=2, limit=50)]
         self.assertEqual(got, want)
+
+
+class IndexTests(unittest.TestCase):
+    """The index must be invisible: same results as search(), including order."""
+
+    def assert_same(self, words, query, **kw):
+        # case sensitivity is fixed at build time for an index, so route it there
+        cs = kw.pop('case_sensitive', False)
+        got = [(m.distance, m.value, m.score)
+               for m in Index(words, case_sensitive=cs).search(query, **kw)]
+        want = [(m.distance, m.value, m.score)
+                for m in search(query, words, case_sensitive=cs, **kw)]
+        self.assertEqual(got, want, (query, kw, len(words)))
+
+    def test_agrees_on_long_strings_where_pruning_engages(self):
+        rng = random.Random(31)
+        words = [''.join(rng.choice('abcdef') for _ in range(rng.randint(12, 24)))
+                 for _ in range(300)]
+        base = rng.choice(words)
+        words += [base, base, base[:5] + 'zz' + base[7:]]
+        for q in ('abcdefghij', base, base[:10], ''):
+            for k in (0, 1, 2, 3):
+                for limit in (1, 5, 50):
+                    self.assert_same(words, q, max_distance=k, limit=limit)
+
+    def test_agrees_on_short_strings_where_index_falls_back(self):
+        """Below the gram bound the index degrades to a scan; it must still agree."""
+        words = ['ab', 'abc', 'abd', 'ba', 'cccc', 'c']
+        for q in ('ab', 'abc', 'abcd', '', 'cc'):
+            for k in (0, 1, 2):
+                self.assert_same(words, q, max_distance=k, limit=10)
+
+    def test_agrees_on_chinese(self):
+        words = ['计算机', '计算机', '计算', '算计机', '网络', '数据库']
+        for q in ('计算机', '计算', '云', ''):
+            for k in (0, 1, 2):
+                self.assert_same(words, q, max_distance=k, limit=10)
+
+    def test_agrees_when_case_sensitive(self):
+        words = ['Python', 'python', 'PYTHON', 'pyhton', 'java']
+        for q in ('Python', 'PYTHON', 'pyhton'):
+            for cs in (False, True):
+                self.assert_same(words, q, max_distance=2, limit=10, case_sensitive=cs)
+
+    def test_empty_corpus(self):
+        self.assertEqual(Index([]).search('x'), [])
+        self.assertEqual(len(Index([])), 0)
+
+    def test_limit_zero(self):
+        self.assertEqual(Index(['abc']).search('abc', limit=0), [])
+
+    def test_validation(self):
+        with self.assertRaises(ValueError):
+            Index(['a'], q=0)
+        with self.assertRaises(ValueError):
+            Index(['a']).search('a', max_distance=-1)
+        with self.assertRaises(ValueError):
+            Index(['a']).search('a', limit=-1)
+
+    def test_random_corpus_matches_search(self):
+        rng = random.Random(909)
+        for _ in range(25):
+            words = [''.join(rng.choice('abcde猫') for _ in range(rng.randint(0, 14)))
+                     for _ in range(80)]
+            q = ''.join(rng.choice('abcde猫') for _ in range(rng.randrange(0, 10)))
+            for k in (0, 1, 2):
+                self.assert_same(words, q, max_distance=k, limit=7)
+
+    def test_built_once_queried_many_times(self):
+        words = ['algorithm', 'algoritm', 'algorithms', 'algebra', 'rhythm']
+        index = Index(words)
+        first = index.search('algoritm', max_distance=2, limit=3)
+        second = index.search('algoritm', max_distance=2, limit=3)
+        self.assertEqual(first, second)
 
 
 if __name__ == '__main__':

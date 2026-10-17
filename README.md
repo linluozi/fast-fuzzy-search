@@ -27,8 +27,37 @@ for m in search("pyhton", choices, max_distance=2, limit=5):
   1.2-1.3× on long strings, lost in the noise on short ones — because the
   candidates it skips were already cheap.
 - `search_dict()` — same, as plain dicts for JSON/API responses
+- `Index(choices)` — prebuilt q-gram index for repeated queries over a fixed,
+  large corpus. **Only pays on long strings**; see below.
 - `levenshtein_bounded(a, b, k)` — distance if `<= k`, else `None`
 - `levenshtein_reference(a, b)` — unbounded distance, used by the tests
+
+```python
+from fast_fuzzy import Index
+
+index = Index(titles)                       # build once
+index.search("the quick brown fxo", max_distance=2, limit=5)
+```
+
+## Index or no index
+
+| string length | banded DP | q-gram `Index` |
+|---|---|---|
+| 2-4 chars (Chinese words) | 0.5× — slower than naive | 0.95× — no pruning, falls back |
+| 8-13 chars | marginal | **18.8×** |
+| 14+ chars | 4-24× | 3.9-18.8× |
+
+Short strings have too little structure: a 3-character query has two 2-grams and
+one edit destroys both, so the gram bound is vacuous. `Index` detects this and
+quietly defers to `search()`, which means it is never wrong — just sometimes
+useless. Use it only when the corpus is large, the strings are long, and you
+query repeatedly; otherwise `search()` wins. `INDEXING.md` has the numbers and
+the failed BK-tree attempt.
+
+**A BK-tree is not the answer here.** It visits 70,798 of 80,000 nodes on
+Chinese input (the distance distribution is too compressed for the triangle
+inequality to prune) and loses by 6× on long strings, because navigating the
+tree requires *exact* distances while the linear scan gets to use the band.
 
 ## Three algorithms, one entry point
 
@@ -103,9 +132,12 @@ python docs/make_figures.py
 - **Case folding is on by default** and can change language-specific matching;
   pass `case_sensitive=True` when needed. Length comparisons happen *after*
   folding, so `'ß'` matches `'ss'`.
-- **No index.** Every call is a linear scan over `choices`. For large corpora
-  build a BK-tree or an n-gram index; this module is the distance kernel, not a
-  search engine.
+- **Indexing helps only on long strings.** `Index` is a q-gram prefilter that
+  prunes well above ~14 characters and not at all below it — a 3-character query
+  has two 2-grams and one edit destroys both. No index design fixes short
+  strings; they have too little structure. If you need fast fuzzy lookup over
+  short strings at scale, the answer is a C extension, not a cleverer Python
+  index.
 - **The numbers are a microbenchmark.** Absolute times are machine-specific and
   drift up to 2× with background load, which is why everything above is a ratio.
   Regenerate on your own hardware before quoting them.

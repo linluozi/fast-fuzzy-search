@@ -203,3 +203,117 @@ def search_dict(query: str, choices: Sequence[str], *, max_distance: int = 2,
     """Dictionary-shaped helper for JSON/API consumers."""
     return [m.__dict__.copy() for m in search(query, choices, max_distance=max_distance,
                                                limit=limit, case_sensitive=case_sensitive)]
+
+
+def _grams(s: str, q: int) -> list[str]:
+    return [s[i:i + q] for i in range(len(s) - q + 1)]
+
+
+class Index:
+    """Prebuilt q-gram index over a fixed corpus, for repeated queries.
+
+    **Read this before using it.** The index only pays when the corpus is large
+    and the strings are long. On 2-4 character Chinese there is nothing to
+    prune: a 3-character query yields two 2-grams, and a single edit destroys
+    both, so the gram-count lower bound collapses to zero and this class
+    silently falls back to a full scan — slower than plain `search()`, because
+    it builds the same candidate set and then filters it.
+
+    It also does not help a BK-tree survive here; see INDEXING.md for the
+    measurements on both approaches, including the cases where they lose.
+
+    Usage:
+
+        index = Index(words)                    # build once
+        index.search('algorithm', max_distance=2, limit=10)   # query many times
+
+    Results are identical to `search()` over the same corpus, including tie
+    ordering. Building costs one gram extraction per string; querying costs one
+    bounded distance per surviving candidate.
+    """
+
+    def __init__(self, choices: Sequence[str], *, q: int = 2,
+                 case_sensitive: bool = False) -> None:
+        if q < 1:
+            raise ValueError("q must be >= 1")
+        self.q = q
+        self.case_sensitive = case_sensitive
+        self._original = list(choices)
+        self._folded = [w if case_sensitive else w.casefold() for w in self._original]
+        self._postings: dict[str, list[int]] = {}
+        for i, word in enumerate(self._folded):
+            for gram in set(_grams(word, q)):
+                self._postings.setdefault(gram, []).append(i)
+
+    def __len__(self) -> int:
+        return len(self._original)
+
+    def _candidates(self, query: str, max_distance: int) -> list[int] | None:
+        """Indices that could be within max_distance, or None to scan all.
+
+        Uses the gram-count lemma: if d(x, y) <= k then y contains at least
+        len(distinct grams of x) - k*q of them, because each edit can destroy
+        at most q grams. Returns None when that bound is zero or the query is
+        too short to produce any gram — at that point filtering is pointless
+        and the caller should just scan.
+        """
+        query_grams = set(_grams(query, self.q))
+        if not query_grams:
+            return None
+        need = len(query_grams) - max_distance * self.q
+        if need <= 0:
+            return None
+
+        counts: dict[int, int] = {}
+        for gram in query_grams:
+            for idx in self._postings.get(gram, ()):
+                counts[idx] = counts.get(idx, 0) + 1
+        return [idx for idx, c in counts.items() if c >= need]
+
+    def search(self, query: str, *, max_distance: int = 2,
+               limit: int = 10) -> list[Match]:
+        """Same contract as `search()`, over the indexed corpus."""
+        if max_distance < 0:
+            raise ValueError("max_distance must be >= 0")
+        if limit < 0:
+            raise ValueError("limit must be >= 0")
+        if limit == 0:
+            return []
+
+        q = query if self.case_sensitive else query.casefold()
+        lq = len(q)
+        candidates = self._candidates(q, max_distance)
+        if candidates is None:
+            return search(query, self._original, max_distance=max_distance,
+                          limit=limit, case_sensitive=self.case_sensitive)
+
+        kept: list[tuple[int, str, str, str]] = []
+        threshold = max_distance
+        for idx in candidates:
+            candidate = self._folded[idx]
+            if abs(lq - len(candidate)) > threshold:
+                continue
+            distance = levenshtein_bounded(q, candidate, threshold)
+            if distance is None:
+                continue
+            tie = candidate if not self.case_sensitive else candidate.casefold()
+            entry = (distance, tie, self._original[idx], candidate)
+            if len(kept) < limit:
+                kept.append(entry)
+                if len(kept) == limit:
+                    kept.sort()
+                    threshold = kept[-1][0]
+            elif entry < kept[-1]:
+                bisect.insort(kept, entry)
+                del kept[-1]
+                threshold = kept[-1][0]
+
+        if len(kept) < limit:
+            kept.sort()
+
+        result = []
+        for distance, _tie, original, candidate in kept:
+            denom = max(lq, len(candidate))
+            score = 100.0 if denom == 0 else 100.0 * (1.0 - distance / denom)
+            result.append(Match(original, distance, score))
+        return result

@@ -23,7 +23,7 @@ import string
 import statistics
 import time
 
-from fast_fuzzy import levenshtein_bounded, levenshtein_reference, search
+from fast_fuzzy import Index, levenshtein_bounded, levenshtein_reference, search
 
 ROUNDS = 5
 N = 4000
@@ -176,6 +176,33 @@ SEARCH_CASES = [
 ]
 
 
+def index_case_zh():
+    rng = random.Random(99)
+    words = make_words(rng, 20000, 2, 4, ZH)
+    return 'zh 2-4, N=20000', '计算机', words, 2
+
+
+def index_case_en_mid():
+    rng = random.Random(17)
+    base = ''.join(rng.choice(EN) for _ in range(14))
+    words = make_words(rng, 20000, 8, 18, EN) + [base] + mutate(base, rng, 200, EN)
+    return 'en 8-18, N=20000', base, words, 2
+
+
+def index_case_en_long():
+    rng = random.Random(5)
+    base = ''.join(rng.choice(EN) for _ in range(30))
+    words = make_words(rng, 20000, 20, 40, EN) + [base] + mutate(base, rng, 200, EN)
+    return 'en 20-40, N=20000', base, words, 2
+
+
+INDEX_CASES = [
+    index_case_zh,
+    index_case_en_mid,
+    index_case_en_long,
+]
+
+
 def run_search(label, factory, limit):
     _tag, q, words, k = factory()
     tu, tp, hits = [], [], 0
@@ -231,6 +258,43 @@ def main():
     print('Tightening only pays where a skipped candidate would have been expensive:')
     print('long strings with a small limit. On 2-4 character Chinese it is a wash, and')
     print('with a limit in the hundreds the window maintenance eats the gain.')
+
+    print()
+    print()
+    print('=' * 88)
+    print('Index: q-gram prefilter, built once and queried repeatedly')
+    print('=' * 88)
+    print(f"{'case':<24}{'scan':>10}{'build':>10}{'query':>10}{'speedup':>9}{'breakeven':>11}")
+    for factory in INDEX_CASES:
+        label, q, words, k = factory()
+
+        t = time.perf_counter()
+        for _ in range(3):
+            search(q, words, max_distance=k, limit=10)
+        t_scan = (time.perf_counter() - t) / 3
+
+        t = time.perf_counter()
+        index = Index(words)
+        t_build = time.perf_counter() - t
+
+        t = time.perf_counter()
+        for _ in range(5):
+            index.search(q, max_distance=k, limit=10)
+        t_q = (time.perf_counter() - t) / 5
+
+        assert ([(m.distance, m.value) for m in index.search(q, max_distance=k, limit=10)]
+                == [(m.distance, m.value) for m in search(q, words, max_distance=k, limit=10)])
+
+        gain = t_scan / t_q
+        breakeven = t_build / (t_scan - t_q) if t_scan > t_q else float('inf')
+        print(f"{label:<24}{t_scan*1000:>8.2f}ms{t_build*1000:>8.1f}ms{t_q*1000:>8.3f}ms"
+              f"{gain:>8.2f}x{breakeven:>10.0f}")
+    print()
+    print('breakeven = how many queries it takes to repay building the index.')
+    print('The index is worthless on 2-4 character Chinese: a 3-character query yields')
+    print('two 2-grams and one edit destroys both, so the gram bound is zero and')
+    print('Index.search falls back to a full scan plus overhead. It only pays on long')
+    print('strings, where it is a real win. See INDEXING.md.')
 
 
 if __name__ == '__main__':
