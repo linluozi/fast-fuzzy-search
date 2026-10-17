@@ -275,6 +275,86 @@ def fig_arms(rows, path):
     print(f"  wrote {path}")
 
 
+# One-off experiment results, not re-measured here: the BK-tree prototype lives
+# outside this repo and takes four minutes to run. Numbers from INDEXING.md,
+# N=80,000 for the tree, N=20,000 for the gram index.
+BKTREE = [
+    ("Chinese 2-4, k=2", 88.5, 1.0),
+    ("Chinese 2-4, k=1", 39.5, 1.9),
+    ("English 8-18, k=2", 35.7, 0.4),
+    ("English 20-40, k=2", 7.1, 0.2),
+]
+GRAM = [
+    ("Chinese 2-4 chars", 0.95),
+    ("English 8-18 chars", 18.8),
+    ("English 20-40 chars", 3.9),
+]
+
+
+def fig_indexing(path):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.4, 5.0),
+                                   gridspec_kw={"wspace": 0.52})
+
+    # --- BK-tree: how much of the tree a query had to touch.
+    # Speedup rides in the tick label so the bars stay about one thing.
+    labels = [b[0] for b in BKTREE]
+    rates = [b[1] for b in BKTREE]
+    y = list(range(len(BKTREE)))
+
+    ax1.barh(y, rates, color=MUTED, height=0.55, zorder=3)
+    # Only the visit rate here: the speedup is the right panel's job, and
+    # two numbers per bar reliably collided at 88%.
+    for i, rate in enumerate(rates):
+        ax1.text(rate + 2.2, i, f"{rate:.0f}%", va="center",
+                 fontsize=10.5, color=INK, weight="bold")
+
+    ax1.set_yticks(y)
+    ax1.set_yticklabels(labels, fontsize=9.8)
+    ax1.invert_yaxis()
+    ax1.set_xlim(0, 104)
+    ax1.set_xlabel("share of the 80,000 nodes a query visits")
+    ax1.set_title("BK-tree — visits more of the tree than it saves",
+                  fontsize=12, weight="bold", loc="left", pad=10)
+    ax1.grid(axis="x", color=FADE, lw=0.9, zorder=0)
+    ax1.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}%"))
+
+    # --- q-gram: dumbbell against the no-index baseline at 1.0
+    glabels = [g[0] for g in GRAM]
+    gvals = [g[1] for g in GRAM]
+    gy = list(range(len(GRAM)))
+
+    ax2.axvline(1.0, color=INK, lw=1.2, ls=(0, (5, 4)), zorder=2)
+    for i, v in enumerate(gvals):
+        color = ACCENT if v < 1.05 else LIB
+        ax2.plot([1.0, v], [i, i], color=color, lw=3.0, zorder=3,
+                 solid_capstyle="round")
+        ax2.plot([v], [i], "o", color=color, ms=9, zorder=4)
+        below = i == 0
+        ax2.text(v, i + (0.30 if below else -0.28), f"{v:.2f}×", ha="center",
+                 va="top" if below else "bottom",
+                 fontsize=10.5, weight="bold", color=color)
+
+    ax2.set_yticks(gy)
+    ax2.set_yticklabels(glabels, fontsize=9.8)
+    ax2.invert_yaxis()
+    ax2.set_xscale("log")
+    ax2.set_xlim(0.42, 42)
+    ax2.xaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10, subs=(1, 2, 5)))
+    ax2.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+    ax2.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}×"))
+    ax2.set_xlabel("indexed query ÷ full scan  (log, right of 1× is faster)")
+    ax2.set_title("q-gram — pays only past ~14 characters",
+                  fontsize=12, weight="bold", loc="left", pad=10)
+    ax2.grid(axis="x", color=FADE, lw=0.9, zorder=0)
+
+    fig.suptitle("Two index designs, the same wall: short strings have no structure to prune",
+                 fontsize=14, weight="bold", x=0.012, ha="left", y=1.03)
+
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  wrote {path}")
+
+
 def main():
     print("measuring length sweep (k=2)...")
     data = measure_lengths()
@@ -286,6 +366,7 @@ def main():
     fig_crossover(data, os.path.join(HERE, "crossover.png"))
     fig_range(rows, os.path.join(HERE, "speedup-range.png"))
     fig_arms(rows, os.path.join(HERE, "three-arms.png"))
+    fig_indexing(os.path.join(HERE, "indexing.png"))
 
 
 if __name__ == "__main__":

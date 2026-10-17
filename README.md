@@ -51,8 +51,18 @@ Short strings have too little structure: a 3-character query has two 2-grams and
 one edit destroys both, so the gram bound is vacuous. `Index` detects this and
 quietly defers to `search()`, which means it is never wrong — just sometimes
 useless. Use it only when the corpus is large, the strings are long, and you
-query repeatedly; otherwise `search()` wins. `INDEXING.md` has the numbers and
-the failed BK-tree attempt.
+query repeatedly; otherwise `search()` wins.
+
+![Two index designs hit the same wall](docs/indexing.png)
+
+Left: how much of an 80,000-node BK-tree a query has to visit. 88% on Chinese
+word lookup — the distance distribution is too compressed for the triangle
+inequality to prune anything, so there is nothing left to save. On long English
+strings it visits only 7% and *still* loses, because every visited node costs a
+full exact distance while the linear scan gets to use the band. Right: the q-gram
+index against the same baseline.
+
+`INDEXING.md` has both experiments in full.
 
 **A BK-tree is not the answer here.** It visits 70,798 of 80,000 nodes on
 Chinese input (the distance distribution is too compressed for the triangle
