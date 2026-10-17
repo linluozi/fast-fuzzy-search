@@ -62,8 +62,7 @@ strings it visits only 7% and *still* loses, because every visited node costs a
 full exact distance while the linear scan gets to use the band. Right: the q-gram
 index against the same baseline.
 
-`INDEXING.md` has both experiments in full.
-
+[INDEXING.md](INDEXING.md) has both experiments in full.
 **A BK-tree is not the answer here.** It visits 70,798 of 80,000 nodes on
 Chinese input (the distance distribution is too compressed for the triangle
 inequality to prune) and loses by 6× on long strings, because navigating the
@@ -112,6 +111,10 @@ C = this library.
 characters and 30× at 40 characters. `C/A` spans **0.96× to 134× on the same code
 path** — any single "speedup" figure for this technique is meaningless without
 stating the string length.
+
+The table and the figures come from separate runs of the same benchmark; they
+disagree by a few percent, which is the run-to-run noise. Either is fine as a
+sketch, neither is a spec.
 
 ![Where the speedup comes from](docs/three-arms.png)
 
